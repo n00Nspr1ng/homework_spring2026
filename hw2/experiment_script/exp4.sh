@@ -6,7 +6,7 @@ uv run src/scripts/run.py --env_name InvertedPendulum-v4 -n 100 -b 5000 -eb 1000
 uv run src/scripts/run.py --env_name InvertedPendulum-v4 -n 100 -b 1000 -eb 1000 \
   -rtg --use_baseline -na --gae_lambda 0.97 \
   --discount 0.99 -lr 0.003 -blr 0.001 -bgs 5 \
-  -l 2 -s 64 --exp_name pendulum_rtg_bl_na_gae097_b1000_lr3e3
+  -l 2 -s 64 --exp_name pendulum_gae097_b1000_lr3e3
 
 # Lower-variance batch
 uv run src/scripts/run.py --env_name InvertedPendulum-v4 -n 50 -b 2000 -eb 1000 \
