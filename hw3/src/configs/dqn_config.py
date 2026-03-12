@@ -30,6 +30,8 @@ def basic_dqn_config(
     use_double_q: bool = False,
     learning_starts: int = 20000,
     batch_size: int = 128,
+    exploration_schedule_endpoints: Optional[list] = None,
+    exploration_schedule_outside_value: Optional[float] = None,
     **kwargs
 ):
     def make_critic(observation_shape: Tuple[int, ...], num_actions: int) -> nn.Module:
@@ -48,13 +50,18 @@ def basic_dqn_config(
     ) -> torch.optim.lr_scheduler._LRScheduler:
         return torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0)
 
-    exploration_schedule = PiecewiseSchedule(
-        [
+    if exploration_schedule_endpoints is None:
+        exploration_schedule_endpoints = [
             (0, 1.0),
             (total_steps * 0.3, 0.1),  # Decay to 0.1 over 30% of steps (more gradual)
             (total_steps * 0.6, 0.02),  # Then decay to 0.02 by 60% of steps
-        ],
-        outside_value=0.02,
+        ]
+    if exploration_schedule_outside_value is None:
+        exploration_schedule_outside_value = 0.02
+
+    exploration_schedule = PiecewiseSchedule(
+        exploration_schedule_endpoints,
+        outside_value=exploration_schedule_outside_value,
     )
 
     def make_env(eval=False, render=False):
