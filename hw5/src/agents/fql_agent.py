@@ -51,7 +51,8 @@ class FQLAgent(nn.Module):
         observation = ptu.from_numpy(np.asarray(observation))[None]
         # TODO(student): Compute the action for evaluation
         # Hint: Unlike SAC+BC and IQL, the evaluation action is *sampled* (i.e., not the mode or mean) from the policy
-        action = ...
+        noise = torch.randn((observation.shape[0], self.action_dim), device=observation.device)
+        action = self.onestep_actor(observation, noise)
         action = torch.clamp(action, -1, 1)
         return ptu.to_numpy(action)[0]
 
@@ -62,8 +63,15 @@ class FQLAgent(nn.Module):
         """
         # TODO(student): Compute the BC flow action using the Euler method for `self.flow_steps` steps
         # Hint: This function should *only* be used in `update_onestep_actor`
-        action = ...
-        action = torch.clamp(action, -1, 1)
+        action = noise
+        dt = 1.0 / self.flow_steps
+        for step in range(self.flow_steps):
+            times = torch.full(
+                (*action.shape[:-1], 1),
+                step / self.flow_steps,
+                device=action.device,
+            )
+            action = action + dt * self.bc_actor(observation, action, times)
         return action
 
     @torch.compile
@@ -81,8 +89,14 @@ class FQLAgent(nn.Module):
         # TODO(student): Compute the Q loss
         # Hint: Use the one-step actor to compute next actions
         # Hint: Remember to clamp the actions to be in [-1, 1] when feeding them to the critic!
-        q = ...
-        loss = ...
+        q = self.critic(observations, actions)
+        with torch.no_grad():
+            noise = torch.randn_like(actions)
+            next_actions = torch.clamp(self.onestep_actor(next_observations, noise), -1, 1)
+            target_q = self.target_critic(next_observations, next_actions).mean(dim=0)
+            target = rewards + (1 - dones.float()) * self.discount * target_q
+            target = target.unsqueeze(0).expand_as(q)
+        loss = nn.functional.mse_loss(q, target)
 
         self.critic_optimizer.zero_grad()
         loss.backward()
@@ -105,7 +119,12 @@ class FQLAgent(nn.Module):
         Update the BC actor
         """
         # TODO(student): Compute the BC flow loss
-        loss = ...
+        noise = torch.randn_like(actions)
+        times = torch.rand((*actions.shape[:-1], 1), device=actions.device)
+        mid_actions = (1 - times) * noise + times * actions
+        pred = self.bc_actor(observations, mid_actions, times)
+        target = actions - noise
+        loss = ((pred - target) ** 2).mean(dim=-1).mean()
 
         self.bc_actor_optimizer.zero_grad()
         loss.backward()
@@ -126,16 +145,20 @@ class FQLAgent(nn.Module):
         """
         # TODO(student): Compute the one-step actor loss
         # Hint: Do *not* clip the one-step actor actions when computing the distillation loss
-        distill_loss = ...
+        noise = torch.randn_like(actions)
+        onestep_actions = self.onestep_actor(observations, noise)
+        with torch.no_grad():
+            bc_actions = self.get_bc_action(observations, noise)
+        distill_loss = self.alpha * ((onestep_actions - bc_actions) ** 2).mean(dim=-1).mean()
 
         # Hint: *Do* clip the one-step actor actions when feeding them to the critic
-        q_loss = ...
+        q_loss = -self.critic(observations, torch.clamp(onestep_actions, -1, 1)).mean(dim=0).mean()
 
         # Total loss.
         loss = distill_loss + q_loss
 
         # Additional metrics for logging.
-        mse = ...
+        mse = ((torch.clamp(onestep_actions, -1, 1) - actions) ** 2).mean()
 
         self.onestep_actor_optimizer.zero_grad()
         loss.backward()
@@ -172,4 +195,9 @@ class FQLAgent(nn.Module):
 
     def update_target_critic(self) -> None:
         # TODO(student): Update target_critic using Polyak averaging with self.target_update_rate
-        ...
+        with torch.no_grad():
+            for param, target_param in zip(self.critic.parameters(), self.target_critic.parameters()):
+                target_param.data.copy_(
+                    self.target_update_rate * param.data
+                    + (1 - self.target_update_rate) * target_param.data
+                )
